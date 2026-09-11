@@ -16,6 +16,7 @@
 //! query.rs     the Query API: the form, the answer, the error, the text rule
 //! client.rs    Xmip's side: send, receive, delete
 //! session.rs   the far end a test or the playground runs on loopback
+//! loopback.rs  both ends of one exchange on this machine (ADR-0051)
 //! ```
 //!
 //! The endpoint, the percent-encoding and HTTP itself come from the http
@@ -35,6 +36,7 @@
 //! empty for this transport's own queue.
 
 pub mod client;
+pub mod loopback;
 pub mod query;
 pub mod session;
 pub mod sigv4;
@@ -176,6 +178,7 @@ mod tests {
     use super::*;
     use std::net::TcpListener;
     use std::thread::JoinHandle;
+    use transport::loopback::Loopback;
     use transport::socket;
 
     fn node(queue_url: &str, secret: &str) -> SqsTransport {
@@ -237,6 +240,50 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn a_message_rounds_through_the_loopback_session() {
+        let loopback = SqsTransport::loopback();
+        let arrived = loopback.round(b"UNA:+.? '").expect("round");
+        assert_eq!(arrived.bytes, b"UNA:+.? '");
+        assert!(
+            arrived.origin_uri.starts_with("http://127.0.0.1:"),
+            "{}",
+            arrived.origin_uri
+        );
+        assert!(arrived.origin_uri.contains("/123456789012/orders#"));
+        assert_eq!(loopback.ceiling(), Some(ceiling()));
+        assert!(loopback.refuses(b"text").is_none());
+        assert!(loopback.refuses(&[0xff]).is_some());
+    }
+
+    #[test]
+    fn the_loopback_returns_the_edges_whole_and_refuses_what_is_not_text() {
+        let loopback = SqsTransport::loopback();
+        let edges: [(&str, Vec<u8>); 8] = [
+            ("empty", Vec::new()),
+            ("one byte", vec![0x2a]),
+            ("every byte", (0..=255).collect()),
+            ("nul run", vec![0; 512]),
+            ("high bytes", vec![0xff; 512]),
+            ("crlf storm", b"\r\n".repeat(400)),
+            ("brim", vec![b'x'; ceiling()]),
+            ("over", vec![b'x'; ceiling() + 1]),
+        ];
+        for (name, payload) in edges {
+            let refused = loopback.refuses(&payload).is_some() || payload.len() > ceiling();
+            match loopback.round(&payload) {
+                Ok(arrived) => {
+                    assert!(!refused, "{name} should have been refused");
+                    assert_eq!(arrived.bytes, payload, "{name}");
+                }
+                Err(error) => {
+                    assert!(refused, "{name}: {error}");
+                    assert!(error.message.starts_with("send failed:"), "{name}: {error}");
+                }
+            }
+        }
     }
 
     #[test]
