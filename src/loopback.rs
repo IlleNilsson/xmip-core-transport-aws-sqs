@@ -13,7 +13,8 @@ use transport::socket;
 use transport::{Arrived, Transport};
 
 use crate::session::{Event, Session};
-use crate::{SqsTransport, ceiling, query};
+use crate::{SqsTransport, ceiling};
+use http::query;
 
 /// The queue a loopback message goes to, under the far end's address.
 pub const QUEUE: &str = "123456789012/orders";

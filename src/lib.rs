@@ -12,17 +12,18 @@
 //! which is the http technology's TLS (ADR-0033).
 //!
 //! ```text
-//! sigv4.rs     signing for a service that is not S3, and verifying
-//! query.rs     the Query API: the form, the answer, the error, the text rule
 //! client.rs    Xmip's side: send, receive, delete
 //! session.rs   the far end a test or the playground runs on loopback
 //! loopback.rs  both ends of one exchange on this machine (ADR-0051)
 //! ```
 //!
-//! The endpoint, the percent-encoding and HTTP itself come from the http
-//! technology, the canonical request and its clock from the s3 technology,
-//! the flat XML scan from the capability (ADR-0044). aws-sns takes the
-//! Query API and the signer from here.
+//! The endpoint, the percent-encoding, HTTP itself, Signature Version 4
+//! and the Query API — the form, the answer, the error, the text rule —
+//! come from the http technology, the flat XML scan from the capability
+//! (ADR-0044). The signer and the Query API lived here until 2026-09-14,
+//! the signer importing the s3 technology and aws-sns importing this one;
+//! what rides on HTTP is shared through the http technology, never
+//! sideways.
 //!
 //! A message is text — one to 256 KiB of the characters XML permits — and
 //! the transport carries bytes as they are or says why it cannot: what is
@@ -37,14 +38,12 @@
 
 pub mod client;
 pub mod loopback;
-pub mod query;
 pub mod session;
-pub mod sigv4;
 
 use std::time::Duration;
 
 pub use client::{Client, Message};
-pub use query::refusal;
+pub use http::query::refusal;
 pub use session::{Event, Session};
 use transport::error::{Result, TransportError};
 use transport::{Arrived, Directions, Transport};
