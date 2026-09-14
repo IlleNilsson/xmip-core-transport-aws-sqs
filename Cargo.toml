@@ -17,16 +17,12 @@ path = "src/lib.rs"
 # A Technology depends on its parent Capability, never the reverse
 # (repository-model.md).
 transport = { package = "xmip-core-transport", git = "https://github.com/IlleNilsson/xmip-core-transport", branch = "main" }
-# The endpoint parser, the request and its answer, percent-encoding, and TLS
-# behind the `tls` feature — one TLS stack in the estate, the http
-# technology's (ADR-0033).
+# The endpoint parser, the request and its answer, percent-encoding,
+# Signature Version 4, the Query API, and TLS behind the `tls` feature —
+# one TLS stack in the estate, the http technology's (ADR-0033). The
+# signer and the Query API moved there on 2026-09-14, and with them the
+# s3 sibling and the SHA-256 and HMAC this crate carried (ADR-0044).
 http = { package = "xmip-core-transport-http", git = "https://github.com/IlleNilsson/xmip-core-transport-http", branch = "main" }
-# Signature Version 4's canonical request and its clock come from the s3
-# technology, the estate's carrier of AWS signing (ADR-0044).
-transport_s3 = { package = "xmip-core-transport-s3", git = "https://github.com/IlleNilsson/xmip-core-transport-s3", branch = "main" }
-# Signature Version 4 is SHA-256 and HMAC-SHA256, nothing else.
-sha2 = "0.10"
-hmac = "0.12"
 
 [features]
 default = []

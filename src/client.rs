@@ -10,10 +10,10 @@ use std::time::Duration;
 
 use transport::error::Result;
 
-use crate::query::{self, parameter, text};
-use crate::sigv4::{self, Signer};
 use http::endpoint;
 use http::message::{self, Request, Response};
+use http::query::{self, parameter, text};
+use http::sigv4::{self, Signer};
 use http::target::HttpTarget;
 use transport::xml::texts;
 
