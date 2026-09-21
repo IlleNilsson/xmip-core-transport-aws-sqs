@@ -4,7 +4,8 @@
 //! and the refusal are the ones every send is held to: 256 KiB, and text
 //! XML permits.
 
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpListener;
+use std::time::Duration;
 
 use http::target::HttpTarget;
 use transport::error::{Result, protocol_error};
@@ -87,7 +88,13 @@ impl Loopback for SqsTransport {
     /// The listener is behind the queue URL's authority.
     fn unblock(&self, address: &str) {
         if let Ok(target) = HttpTarget::parse(address) {
-            drop(TcpStream::connect(target.authority));
+            // The poke only has to be quick, because the far end bounds its own wait. An
+            // unbounded poke under port exhaustion waited on Windows' ~21-second SYN
+            // schedule; it was bare until 2026-09-21.
+            drop(socket::connect_tcp(
+                target.authority,
+                Some(Duration::from_millis(250)),
+            ));
         }
     }
 }
