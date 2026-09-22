@@ -15,9 +15,9 @@ use std::fmt::Write as _;
 use std::net::TcpListener;
 use std::time::Duration;
 
+use codec::xml::escape;
 use transport::Arrived;
 use transport::error::Result;
-use transport::xml::escape;
 
 use crate::client::VERSION;
 use http::message::{Request, Response};
