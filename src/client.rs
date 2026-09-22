@@ -68,7 +68,7 @@ impl Client {
             ("MessageBody", body),
         ];
         let answer = self.call(queue_url, &parameters)?;
-        Ok(transport::xml::first(&answer.text(), "MessageId").unwrap_or_default())
+        Ok(transport::xml::first(&answer.text(), "MessageId")?.unwrap_or_default())
     }
 
     /// Up to [`MAX_MESSAGES`] messages from the queue at `queue_url`,
@@ -88,9 +88,9 @@ impl Client {
             ("WaitTimeSeconds", wait.as_str()),
         ];
         let xml = self.call(queue_url, &parameters)?.text();
-        let ids = texts(&xml, "MessageId");
-        let handles = texts(&xml, "ReceiptHandle");
-        let bodies = texts(&xml, "Body");
+        let ids = texts(&xml, "MessageId")?;
+        let handles = texts(&xml, "ReceiptHandle")?;
+        let bodies = texts(&xml, "Body")?;
         Ok(ids
             .into_iter()
             .zip(handles)

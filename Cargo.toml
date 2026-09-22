@@ -17,6 +17,8 @@ path = "src/lib.rs"
 # A Technology depends on its parent Capability, never the reverse
 # (repository-model.md).
 transport = { package = "xmip-core-transport", git = "https://github.com/IlleNilsson/xmip-core-transport", branch = "main" }
+# XML character data, escaped as every reader in the estate unescapes it.
+codec = { package = "xmip-core-codec", git = "https://github.com/IlleNilsson/xmip-core-codec", branch = "main" }
 # The endpoint parser, the request and its answer, percent-encoding,
 # Signature Version 4, the Query API, and TLS behind the `tls` feature —
 # one TLS stack in the estate, the http technology's (ADR-0033). The
