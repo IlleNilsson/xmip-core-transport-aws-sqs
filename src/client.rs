@@ -10,10 +10,10 @@ use std::time::Duration;
 
 use transport::error::Result;
 
+use aws::query::{self, parameter, text};
+use aws::sigv4::{self, Signer};
 use http::endpoint;
 use http::message::{self, Request, Response};
-use http::query::{self, parameter, text};
-use http::sigv4::{self, Signer};
 use http::target::HttpTarget;
 use transport::xml::texts;
 
