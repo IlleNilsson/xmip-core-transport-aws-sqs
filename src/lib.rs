@@ -17,18 +17,19 @@
 //! loopback.rs  both ends of one exchange on this machine (ADR-0051)
 //! ```
 //!
-//! The endpoint, the percent-encoding, HTTP itself, Signature Version 4
-//! and the Query API — the form, the answer, the error, the text rule —
-//! come from the http technology, the flat XML scan from the capability
-//! (ADR-0044). The signer and the Query API lived here until 2026-09-14,
-//! the signer importing the s3 technology and aws-sns importing this one;
-//! what rides on HTTP is shared through the http technology, never
-//! sideways.
+//! The endpoint, the percent-encoding and HTTP itself come from the http
+//! technology; Signature Version 4 and the Query API — the form, the
+//! answer, the error, the text rule — from the AWS crate, the flat XML
+//! scan from the capability (ADR-0044). The signer and the Query API lived
+//! here until 2026-09-14, the signer importing the s3 technology and
+//! aws-sns importing this one, and in the http technology until the
+//! owner's ruling of 2026-09-22: what AWS speaks is shared through the AWS
+//! crate, never sideways.
 //!
 //! A message is text — one to 256 KiB of the characters XML permits — and
 //! the transport carries bytes as they are or says why it cannot: what is
 //! not that text is refused before a request is formed, never encoded and
-//! called delivered. [`ceiling`] and [`refusal`] say both rules.
+//! called delivered. [`ceiling`] and [`aws::query::refusal`] say both rules.
 //!
 //! A queue is not an artefact anyone claims: a received message is in
 //! flight until it is deleted, which is the queue's own claim, so
@@ -43,7 +44,6 @@ pub mod session;
 use std::time::Duration;
 
 pub use client::{Client, Message};
-pub use http::query::refusal;
 pub use session::{Event, Session};
 use transport::error::{Result, TransportError};
 use transport::{Arrived, Directions, Transport};
@@ -330,7 +330,7 @@ mod tests {
         let failure = near.send("", b"").expect_err("empty");
         assert!(!failure.retryable);
         assert!(failure.message.contains("at least one"), "{failure}");
-        assert!(refusal(&[0xff]).is_some());
-        assert!(refusal(b"text").is_none());
+        assert!(aws::query::refusal(&[0xff]).is_some());
+        assert!(aws::query::refusal(b"text").is_none());
     }
 }

@@ -19,12 +19,14 @@ path = "src/lib.rs"
 transport = { package = "xmip-core-transport", git = "https://github.com/IlleNilsson/xmip-core-transport", branch = "main" }
 # XML character data, escaped as every reader in the estate unescapes it.
 codec = { package = "xmip-core-library-codec", git = "https://github.com/IlleNilsson/xmip-core-library-codec", branch = "main" }
-# The endpoint parser, the request and its answer, percent-encoding,
-# Signature Version 4, the Query API, and TLS behind the `tls` feature —
-# one TLS stack in the estate, the http technology's (ADR-0033). The
-# signer and the Query API moved there on 2026-09-14, and with them the
-# s3 sibling and the SHA-256 and HMAC this crate carried (ADR-0044).
+# The endpoint parser, the request and its answer, percent-encoding, and
+# TLS behind the `tls` feature — one TLS stack in the estate, the http
+# technology's (ADR-0033).
 http = { package = "xmip-core-transport-http", git = "https://github.com/IlleNilsson/xmip-core-transport-http", branch = "main" }
+# Signature Version 4 and the Query API, which this crate carried until
+# 2026-09-14; they are AWS's, and every AWS technology speaks them through
+# the AWS crate (ADR-0044, the owner's ruling of 2026-09-22).
+aws = { package = "xmip-core-transport-aws", git = "https://github.com/IlleNilsson/xmip-core-transport-aws", branch = "main" }
 
 [features]
 default = []
