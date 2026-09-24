@@ -5,15 +5,15 @@
 //! XML permits.
 
 use std::net::TcpListener;
-use std::time::Duration;
 
 use http::target::HttpTarget;
+use transport::Transport;
 use transport::error::{Result, protocol_error};
-use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
+use transport::listening::Listening;
+use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback, poke};
 use transport::socket;
-use transport::{Arrived, Transport};
 
-use crate::session::{Event, Session};
+use crate::session::Event;
 use crate::{SqsTransport, ceiling};
 use aws::query;
 
@@ -35,27 +35,6 @@ impl SqsTransport {
     }
 }
 
-/// A bound session waiting for its one send.
-struct Serving {
-    session: Session,
-    listener: TcpListener,
-    address: String,
-}
-
-impl FarEnd for Serving {
-    fn address(&self) -> &str {
-        &self.address
-    }
-
-    fn take_one(mut self: Box<Self>) -> Result<Arrived> {
-        match self.session.serve_one(&self.listener)? {
-            Event::Sent(arrived) => Ok(arrived),
-            Event::Refused(code) => Err(protocol_error(format!("the session refused: {code}"))),
-            other => Err(protocol_error(format!("not a send: {other:?}"))),
-        }
-    }
-}
-
 impl Loopback for SqsTransport {
     fn ceiling(&self) -> Option<usize> {
         Some(ceiling())
@@ -66,12 +45,16 @@ impl Loopback for SqsTransport {
     }
 
     fn far_end(&self) -> Result<Box<dyn FarEnd>> {
+        let mut session = self.session();
         let (listener, bound) = socket::bind_tcp("127.0.0.1:0")?;
-        Ok(Box::new(Serving {
-            session: self.session(),
-            listener,
-            address: format!("http://{bound}/{QUEUE}"),
-        }))
+        Ok(Box::new(Listening::new(
+            move |listener: &TcpListener| match session.serve_one(listener)? {
+                Event::Sent(arrived) => Ok(arrived),
+                Event::Refused(code) => Err(protocol_error(format!("the session refused: {code}"))),
+                other => Err(protocol_error(format!("not a send: {other:?}"))),
+            },
+            (listener, format!("http://{bound}/{QUEUE}")),
+        )))
     }
 
     /// `address` is the queue URL, which is what an SQS address is.
@@ -88,13 +71,7 @@ impl Loopback for SqsTransport {
     /// The listener is behind the queue URL's authority.
     fn unblock(&self, address: &str) {
         if let Ok(target) = HttpTarget::parse(address) {
-            // The poke only has to be quick, because the far end bounds its own wait. An
-            // unbounded poke under port exhaustion waited on Windows' ~21-second SYN
-            // schedule; it was bare until 2026-09-21.
-            drop(socket::connect_tcp(
-                target.authority,
-                Some(Duration::from_millis(250)),
-            ));
+            poke(target.authority);
         }
     }
 }

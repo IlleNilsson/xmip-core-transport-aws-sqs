@@ -17,7 +17,7 @@
 //! loopback.rs  both ends of one exchange on this machine (ADR-0051)
 //! ```
 //!
-//! The endpoint, the percent-encoding and HTTP itself come from the http
+//! The endpoint and HTTP itself come from the http
 //! technology; Signature Version 4 and the Query API — the form, the
 //! answer, the error, the text rule — from the AWS crate, the flat XML
 //! scan from the capability (ADR-0044). The signer and the Query API lived
@@ -45,7 +45,8 @@ use std::time::Duration;
 
 pub use client::{Client, Message};
 pub use session::{Event, Session};
-use transport::error::{Result, TransportError};
+use transport::ceiling;
+use transport::error::Result;
 use transport::{Arrived, Directions, Transport};
 
 /// The largest message SQS carries: 256 KiB.
@@ -159,13 +160,7 @@ impl Transport for SqsTransport {
     }
 
     fn send(&self, target: &str, bytes: &[u8]) -> Result<()> {
-        if bytes.len() > ceiling() {
-            return Err(TransportError::permanent(format!(
-                "{} bytes is over the {} one SQS message carries",
-                bytes.len(),
-                ceiling()
-            )));
-        }
+        ceiling::within(bytes.len(), ceiling(), "one SQS message carries")?;
         self.client()
             .send_message(self.resolve(target), bytes)
             .map(|_| ())
