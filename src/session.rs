@@ -22,8 +22,8 @@ use transport::error::Result;
 use crate::client::VERSION;
 use aws::query::{self, parameter};
 use aws::sigv4::Signer;
-use http::message::{Request, Response};
 use http::server;
+use net::http::{Request, Response};
 
 /// What the client did, as [`Session::serve_one`] reports it.
 #[derive(Clone, Debug, PartialEq, Eq)]

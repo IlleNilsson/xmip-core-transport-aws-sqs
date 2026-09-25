@@ -6,7 +6,7 @@
 
 use std::net::TcpListener;
 
-use http::target::HttpTarget;
+use net::Endpoint;
 use transport::Transport;
 use transport::error::{Result, protocol_error};
 use transport::listening::Listening;
@@ -70,8 +70,8 @@ impl Loopback for SqsTransport {
 
     /// The listener is behind the queue URL's authority.
     fn unblock(&self, address: &str) {
-        if let Ok(target) = HttpTarget::parse(address) {
-            poke(target.authority);
+        if let Ok(endpoint) = Endpoint::parse(address) {
+            poke(&endpoint.address());
         }
     }
 }
