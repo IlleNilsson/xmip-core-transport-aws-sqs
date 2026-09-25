@@ -23,6 +23,9 @@ codec = { package = "xmip-core-library-codec", git = "https://github.com/IlleNil
 # TLS behind the `tls` feature — one TLS stack in the estate, the http
 # technology's (ADR-0033).
 http = { package = "xmip-core-transport-http", git = "https://github.com/IlleNilsson/xmip-core-transport-http", branch = "main" }
+# HTTP/1.1 on the wire (`net::http`) and the URL an endpoint is
+# (`net::Endpoint`): the one codec every technology riding on HTTP calls.
+net = { package = "xmip-core-library-net", git = "https://github.com/IlleNilsson/xmip-core-library-net", branch = "main" }
 # Signature Version 4 and the Query API, which this crate carried until
 # 2026-09-14; they are AWS's, and every AWS technology speaks them through
 # the AWS crate (ADR-0044, the owner's ruling of 2026-09-22).

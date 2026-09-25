@@ -13,8 +13,8 @@ use transport::error::Result;
 use aws::query::{self, parameter, text};
 use aws::sigv4::{self, Signer};
 use http::endpoint;
-use http::message::{self, Request, Response};
-use http::target::HttpTarget;
+use net::Endpoint;
+use net::http::{Request, Response};
 use transport::xml::texts;
 
 /// The Query API version every request names.
@@ -118,14 +118,12 @@ impl Client {
     }
 
     fn call(&self, queue_url: &str, parameters: &[(&str, &str)]) -> Result<Response> {
-        let target = HttpTarget::parse(queue_url)?;
-        let scheme = if target.secure { "https" } else { "http" };
-        let endpoint = format!("{scheme}://{}", target.authority);
-        let host = endpoint::authority(&endpoint)?;
-        let request = query::request(target.path, parameters).header("Host", &host);
+        let endpoint = Endpoint::parse(queue_url)?;
+        let request =
+            query::request(endpoint.path(), parameters).header("Host", &endpoint.authority());
         let signed = self.signer.sign(request, &sigv4::now());
         let stream = endpoint::connect(&endpoint, self.timeout)?;
-        query::judge("SQS", message::exchange(stream, &signed)?)
+        query::judge("SQS", net::http::exchange(stream, &signed)?)
     }
 }
 
