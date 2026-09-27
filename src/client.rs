@@ -12,7 +12,7 @@ use transport::error::Result;
 
 use aws::query::{self, parameter, text};
 use aws::sigv4::{self, Signer};
-use http::endpoint;
+use http::endpoint::{Connections, Offer};
 use net::Endpoint;
 use net::http::{Request, Response};
 use transport::xml::texts;
@@ -36,6 +36,9 @@ pub struct Message {
 pub struct Client {
     signer: Signer,
     timeout: Option<Duration>,
+    /// The connections kept to the service, shared with the transport
+    /// that made this client.
+    connections: Connections,
 }
 
 impl Client {
@@ -45,6 +48,7 @@ impl Client {
         Self {
             signer: Signer::new("sqs", region, access_key, secret_key),
             timeout: None,
+            connections: Connections::new(),
         }
     }
 
@@ -52,6 +56,14 @@ impl Client {
     #[must_use]
     pub const fn timing_out_after(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
+        self
+    }
+
+    /// Keep connections among `connections`, which the transport holds
+    /// across every client it makes.
+    #[must_use]
+    pub fn sharing(mut self, connections: Connections) -> Self {
+        self.connections = connections;
         self
     }
 
@@ -128,8 +140,10 @@ impl Client {
         let request =
             query::request(endpoint.path(), parameters).header("Host", &endpoint.authority());
         let signed = self.signer.sign(request, &sigv4::now());
-        let stream = endpoint::connect(&endpoint, self.timeout)?;
-        query::judge("SQS", net::http::exchange(stream, &signed)?)
+        let answer = self
+            .connections
+            .exchange(&endpoint, self.timeout, Offer::Http11, &signed)?;
+        query::judge("SQS", answer)
     }
 }
 
