@@ -44,7 +44,8 @@ pub enum Event {
     Refused(String),
 }
 
-/// One message held, by its queue.
+/// One message held, by its queue, as SQS holds it: text, which is what it
+/// answers a receive with.
 #[derive(Clone, Debug)]
 struct Held {
     id: String,
@@ -78,14 +79,15 @@ impl Session {
         self
     }
 
-    /// Every message held now, keyed `queue_url#id`, in flight or not.
+    /// Every message held now, keyed `queue_url#id`, in flight or not: the
+    /// bytes of its text, as a Stream carries them.
     #[must_use]
-    pub fn messages(&self) -> BTreeMap<String, String> {
+    pub fn messages(&self) -> BTreeMap<String, Vec<u8>> {
         self.queues
             .iter()
             .flat_map(|(queue, held)| {
                 held.iter()
-                    .map(move |m| (origin(queue, &m.id), m.body.clone()))
+                    .map(move |m| (origin(queue, &m.id), m.body.clone().into_bytes()))
             })
             .collect()
     }
@@ -256,6 +258,7 @@ mod tests {
         assert!(
             response
                 .text()
+                .expect("text")
                 .contains("<MessageId>00000001-xmip</MessageId>")
         );
         let origin = format!("{QUEUE}#00000001-xmip");
@@ -265,7 +268,12 @@ mod tests {
         );
         let received = signed(&[("Action", "ReceiveMessage"), ("WaitTimeSeconds", "5")]);
         let (event, response) = session.answer(&received);
-        assert!(response.text().contains("<Body>a&lt;b</Body>"));
+        assert!(
+            response
+                .text()
+                .expect("text")
+                .contains("<Body>a&lt;b</Body>")
+        );
         assert!(matches!(
             event,
             Event::Received {
@@ -276,7 +284,7 @@ mod tests {
         ));
         let (event, response) = session.answer(&received);
         assert!(
-            !response.text().contains("<Message>"),
+            !response.text().expect("text").contains("<Message>"),
             "in flight, not offered again"
         );
         assert!(matches!(event, Event::Received { count: 0, .. }));

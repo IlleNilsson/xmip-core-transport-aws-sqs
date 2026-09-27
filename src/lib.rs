@@ -26,10 +26,12 @@
 //! owner's ruling of 2026-09-22: what AWS speaks is shared through the AWS
 //! crate, never sideways.
 //!
-//! A message is text — one to 256 KiB of the characters XML permits — and
-//! the transport carries bytes as they are or says why it cannot: what is
-//! not that text is refused before a request is formed, never encoded and
-//! called delivered. [`ceiling`] and [`aws::query::refusal`] say both rules.
+//! A payload is bytes (ADR-0038, amendment 2026-09-26), and SQS carries a
+//! message as text — one to 256 KiB of the characters XML permits, UTF-8.
+//! Only the wire is text: the transport takes bytes and hands bytes up, and
+//! turns them into text where the request is formed. What is not that text
+//! is refused there with the reason, never replaced and called delivered.
+//! [`ceiling`] and [`aws::query::refusal`] say both rules.
 //!
 //! A queue is not an artefact anyone claims: a received message is in
 //! flight until it is deleted, which is the queue's own claim, so
@@ -47,7 +49,8 @@ pub use client::{Client, Message};
 pub use session::{Event, Session};
 use transport::ceiling;
 use transport::error::Result;
-use transport::{Arrived, Directions, Transport};
+use transport::{Arrived, Configured, Directions, Transport};
+use xcore::settings::{Applies, Kind, Presence, Read, Setting, Settings};
 
 /// The largest message SQS carries: 256 KiB.
 #[must_use]
@@ -153,7 +156,7 @@ impl Transport for SqsTransport {
             client.delete_message(&self.queue_url, &message.receipt_handle)?;
             arrived.push(Arrived::new(
                 session::origin(&self.queue_url, &message.id),
-                message.body.into_bytes(),
+                message.body,
             ));
         }
         Ok(arrived)
@@ -164,6 +167,56 @@ impl Transport for SqsTransport {
         self.client()
             .send_message(self.resolve(target), bytes)
             .map(|_| ())
+    }
+}
+
+impl Configured for SqsTransport {
+    /// The address is the queue URL, `https://sqs.<region>.amazonaws.com/
+    /// <account>/<queue>`. The access key and its secret are the Location's
+    /// credentials, not settings: a secret never is.
+    const SETTINGS: &'static Settings = &Settings {
+        technology: env!("CARGO_PKG_NAME"),
+        settings: &[
+            Setting {
+                name: "region",
+                kind: Kind::Text,
+                presence: Presence::Required,
+                meaning: "The AWS region requests are signed for, eu-north-1.",
+                applies: Applies::Both,
+            },
+            Setting {
+                name: "wait_seconds",
+                kind: Kind::Integer {
+                    minimum: 0,
+                    maximum: 20,
+                },
+                presence: Presence::Optional,
+                meaning: "How many seconds a receive long-polls an empty queue for a \
+                          message; it answers at once when left out.",
+                applies: Applies::Receive,
+            },
+            Setting {
+                name: "timeout",
+                kind: Kind::Duration,
+                presence: Presence::Optional,
+                meaning: "How long an endpoint that stops answering is waited on; unbounded \
+                          when left out.",
+                applies: Applies::Both,
+            },
+        ],
+    };
+
+    fn configured(address: &str, settings: &Read) -> Result<Self> {
+        // The access key and secret come through the Location's credentials.
+        let mut transport = Self::new(address, settings.text("region"));
+        if let Some(seconds) = settings.optional_integer("wait_seconds") {
+            // The declaration holds it to 0..=20; waiting caps it again.
+            transport = transport.waiting(u8::try_from(seconds).unwrap_or(u8::MAX));
+        }
+        Ok(match settings.optional_duration("timeout") {
+            Some(timeout) => transport.timing_out_after(timeout),
+            None => transport,
+        })
     }
 }
 
@@ -180,6 +233,29 @@ mod tests {
             .with_credentials("AKID", secret)
             .waiting(1)
             .timing_out_after(Duration::from_secs(2))
+    }
+
+    #[test]
+    fn sqs_declares_its_settings_and_reads_through_them() {
+        use xcore::settings::Given;
+        assert_eq!(SqsTransport::SETTINGS.problems(), Vec::<String>::new());
+        let queue_url = "https://sqs.eu-north-1.amazonaws.com/123456789012/orders";
+        let given = [
+            ("region".to_string(), Given::Text("eu-north-1".to_string())),
+            ("wait_seconds".to_string(), Given::Integer(20)),
+            ("timeout".to_string(), Given::Text("30s".to_string())),
+        ];
+        let received = SqsTransport::open(queue_url, Applies::Receive, &given).expect("built");
+        assert_eq!(received.queue_url, queue_url);
+        assert_eq!(
+            (received.region.as_str(), received.wait),
+            ("eu-north-1", 20)
+        );
+        assert_eq!(received.timeout, Some(Duration::from_secs(30)));
+        let Err(refused) = SqsTransport::open(queue_url, Applies::Send, &given) else {
+            panic!("a Send Location does not long-poll");
+        };
+        assert!(refused.message.contains("\"wait_seconds\""), "{refused}");
     }
 
     fn serve(
@@ -325,6 +401,15 @@ mod tests {
         let failure = near.send("", b"").expect_err("empty");
         assert!(!failure.retryable);
         assert!(failure.message.contains("at least one"), "{failure}");
+        let failure = near.send("", &[b'r', 0xe4, b'k']).expect_err("Latin-1");
+        assert!(!failure.retryable, "{failure}");
+        assert!(
+            failure
+                .message
+                .contains("SQS carries a message body as text")
+                && failure.message.contains("UTF-8"),
+            "{failure}"
+        );
         assert!(aws::query::refusal(&[0xff]).is_some());
         assert!(aws::query::refusal(b"text").is_none());
     }
