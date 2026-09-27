@@ -23,12 +23,14 @@ pub const VERSION: &str = "2012-11-05";
 /// The most one `ReceiveMessage` hands back.
 pub const MAX_MESSAGES: u8 = 10;
 
-/// One message as it came off the queue.
+/// One message as it came off the queue. SQS carries its body as text;
+/// here it is the bytes of that text, UTF-8, as Xmip carries a payload
+/// (ADR-0038).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Message {
     pub id: String,
     pub receipt_handle: String,
-    pub body: String,
+    pub body: Vec<u8>,
 }
 
 pub struct Client {
@@ -56,11 +58,14 @@ impl Client {
     /// Send `bytes` as one message to the queue at `queue_url`, and learn
     /// its id.
     ///
+    /// SQS carries a body as text, so this is where the bytes become text:
+    /// UTF-8 of the characters XML permits, or refused — never replaced.
+    ///
     /// # Errors
     /// Where the bytes are not a message body, or the endpoint refused or
     /// could not be reached.
     pub fn send_message(&self, queue_url: &str, bytes: &[u8]) -> Result<String> {
-        let body = text(bytes)?;
+        let body = text(bytes).map_err(|e| e.at("SQS carries a message body as text"))?;
         let parameters = [
             ("Action", "SendMessage"),
             ("Version", VERSION),
@@ -68,7 +73,7 @@ impl Client {
             ("MessageBody", body),
         ];
         let answer = self.call(queue_url, &parameters)?;
-        Ok(transport::xml::first(&answer.text(), "MessageId")?.unwrap_or_default())
+        Ok(transport::xml::first(answer.text()?, "MessageId")?.unwrap_or_default())
     }
 
     /// Up to [`MAX_MESSAGES`] messages from the queue at `queue_url`,
@@ -87,10 +92,11 @@ impl Client {
             ("MaxNumberOfMessages", count.as_str()),
             ("WaitTimeSeconds", wait.as_str()),
         ];
-        let xml = self.call(queue_url, &parameters)?.text();
-        let ids = texts(&xml, "MessageId")?;
-        let handles = texts(&xml, "ReceiptHandle")?;
-        let bodies = texts(&xml, "Body")?;
+        let answer = self.call(queue_url, &parameters)?;
+        let xml = answer.text()?;
+        let ids = texts(xml, "MessageId")?;
+        let handles = texts(xml, "ReceiptHandle")?;
+        let bodies = texts(xml, "Body")?;
         Ok(ids
             .into_iter()
             .zip(handles)
@@ -98,7 +104,7 @@ impl Client {
             .map(|((id, receipt_handle), body)| Message {
                 id,
                 receipt_handle,
-                body,
+                body: body.into_bytes(),
             })
             .collect())
     }
@@ -161,8 +167,8 @@ mod tests {
         let messages = client.receive_message(&queue, 20).expect("received");
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].id, id);
-        assert_eq!(messages[0].body, "UNA:+.? '");
-        assert_eq!(messages[1].body, "r\u{e4}k <&> \"b\"");
+        assert_eq!(messages[0].body, b"UNA:+.? '");
+        assert_eq!(messages[1].body, "r\u{e4}k <&> \"b\"".as_bytes());
         client
             .delete_message(&queue, &messages[0].receipt_handle)
             .expect("deleted");
@@ -199,6 +205,17 @@ mod tests {
             .expect_err("not text");
         assert!(!refused.retryable);
         assert!(refused.message.contains("U+0000"));
+        let refused = client
+            .send_message("http://127.0.0.1:1/q", &[b'a', 0xff, 0xfe])
+            .expect_err("not UTF-8");
+        assert!(!refused.retryable);
+        assert!(
+            refused
+                .message
+                .starts_with("SQS carries a message body as text: "),
+            "{refused}"
+        );
+        assert!(refused.message.contains("UTF-8"), "{refused}");
         let refused = client
             .send_message("sqs.local/q", b"x")
             .expect_err("no scheme");
