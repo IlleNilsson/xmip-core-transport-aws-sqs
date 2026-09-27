@@ -46,6 +46,7 @@ pub mod session;
 use std::time::Duration;
 
 pub use client::{Client, Message};
+use http::endpoint::Connections;
 pub use session::{Event, Session};
 use transport::ceiling;
 use transport::error::Result;
@@ -65,6 +66,9 @@ pub struct SqsTransport {
     secret_key: String,
     wait: u8,
     timeout: Option<Duration>,
+    /// The connections kept to the service, shared by every client this
+    /// makes.
+    connections: Connections,
 }
 
 impl SqsTransport {
@@ -80,6 +84,7 @@ impl SqsTransport {
             secret_key: String::new(),
             wait: 0,
             timeout: None,
+            connections: Connections::new(),
         }
     }
 
@@ -110,6 +115,7 @@ impl SqsTransport {
     #[must_use]
     pub fn client(&self) -> Client {
         let client = Client::new(&self.region, &self.access_key, &self.secret_key);
+        let client = client.sharing(self.connections.clone());
         match self.timeout {
             Some(timeout) => client.timing_out_after(timeout),
             None => client,
