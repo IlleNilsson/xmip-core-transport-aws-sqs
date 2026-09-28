@@ -47,8 +47,8 @@ use std::time::Duration;
 
 pub use client::{Client, Message};
 use http::endpoint::Connections;
+use net::ceiling;
 pub use session::{Event, Session};
-use transport::ceiling;
 use transport::error::Result;
 use transport::{Arrived, Configured, Directions, Transport};
 use xcore::settings::{Applies, Kind, Presence, Read, Setting, Settings};
