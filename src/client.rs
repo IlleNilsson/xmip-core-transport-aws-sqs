@@ -12,10 +12,10 @@ use transport::error::Result;
 
 use aws::query::{self, parameter, text};
 use aws::sigv4::{self, Signer};
+use codec::xml::texts;
 use http::endpoint::{Connections, Offer};
 use net::Endpoint;
 use net::http::{Request, Response};
-use transport::xml::texts;
 
 /// The Query API version every request names.
 pub const VERSION: &str = "2012-11-05";
@@ -85,7 +85,7 @@ impl Client {
             ("MessageBody", body),
         ];
         let answer = self.call(queue_url, &parameters)?;
-        Ok(transport::xml::first(answer.text()?, "MessageId")?.unwrap_or_default())
+        Ok(codec::xml::text(answer.text()?, "MessageId")?.unwrap_or_default())
     }
 
     /// Up to [`MAX_MESSAGES`] messages from the queue at `queue_url`,
