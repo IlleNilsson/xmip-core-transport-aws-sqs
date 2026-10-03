@@ -3,11 +3,12 @@
 //!
 //! Not SQS. One session holds the messages of every queue it is asked
 //! about in memory, verifies every request against one credential, and
-//! answers the three calls with the shapes SQS answers them — the message
+//! answers the four calls with the shapes SQS answers them — the message
 //! id, the messages with their receipt handles, the error with its code. A
 //! `ReceiveMessage` that finds nothing answers at once and records the wait
 //! it was asked for rather than holding the connection; a received message
-//! stays in flight until it is deleted, as SQS keeps it. There is no
+//! stays in flight until it is deleted, as SQS keeps it, or until a
+//! `ChangeMessageVisibility` to zero makes it visible again. There is no
 //! `MD5OfBody`: a Location does not read it, and the estate carries no MD5.
 
 use std::collections::BTreeMap;
@@ -16,7 +17,7 @@ use std::net::TcpListener;
 use std::time::Duration;
 
 use codec::xml::escape;
-use transport::Arrived;
+use transport::Taken;
 use transport::error::Result;
 
 use crate::client::VERSION;
@@ -30,7 +31,7 @@ use net::http::{Request, Response};
 pub enum Event {
     /// The client sent a message; here is the Stream, its origin the queue
     /// URL and the id it was given.
-    Sent(Arrived),
+    Sent(Taken),
     /// The client received `count` messages from `queue`, asking to wait
     /// `wait` seconds where there were none.
     Received {
@@ -40,6 +41,8 @@ pub enum Event {
     },
     /// The client deleted this message.
     Deleted(String),
+    /// The client made this message visible again at once.
+    Released(String),
     /// The client was answered with this error code.
     Refused(String),
 }
@@ -120,7 +123,8 @@ impl Session {
             Some("SendMessage") => self.send(&queue, &parameters),
             Some("ReceiveMessage") => self.receive(&queue, &parameters),
             Some("DeleteMessage") => self.delete(&queue, &parameters),
-            _ => refused(400, "InvalidAction", "not one of the three calls"),
+            Some("ChangeMessageVisibility") => self.release(&queue, &parameters),
+            _ => refused(400, "InvalidAction", "not one of the four calls"),
         }
     }
 
@@ -146,7 +150,7 @@ impl Session {
              </SendMessageResult></SendMessageResponse>"
         );
         (
-            Event::Sent(Arrived::new(origin(queue, &id), body.as_bytes())),
+            Event::Sent(Taken::new(origin(queue, &id), body.as_bytes())),
             answer(&xml),
         )
     }
@@ -191,27 +195,47 @@ impl Session {
     }
 
     fn delete(&mut self, queue: &str, parameters: &[(String, String)]) -> (Event, Response) {
-        let id = parameter(parameters, "ReceiptHandle")
-            .and_then(|handle| handle.strip_prefix("rh-"))
-            .map(str::to_string);
         let held = self.queues.entry(queue.to_string()).or_default();
-        let at = id
-            .as_ref()
-            .and_then(|id| held.iter().position(|m| &m.id == id && m.in_flight));
-        match (id, at) {
-            (Some(id), Some(at)) => {
-                held.remove(at);
-                let xml = "<DeleteMessageResponse><ResponseMetadata><RequestId>xmip\
-                           </RequestId></ResponseMetadata></DeleteMessageResponse>";
-                (Event::Deleted(origin(queue, &id)), answer(xml))
-            }
-            _ => refused(
-                404,
-                "ReceiptHandleIsInvalid",
-                "The receipt handle is not valid.",
-            ),
-        }
+        let Some((id, at)) = in_flight(held, parameters) else {
+            return invalid_handle();
+        };
+        held.remove(at);
+        let xml = "<DeleteMessageResponse><ResponseMetadata><RequestId>xmip\
+                   </RequestId></ResponseMetadata></DeleteMessageResponse>";
+        (Event::Deleted(origin(queue, &id)), answer(xml))
     }
+
+    /// `ChangeMessageVisibility`: only to zero, which is what a Location
+    /// asks for when a receive cycle refused the message.
+    fn release(&mut self, queue: &str, parameters: &[(String, String)]) -> (Event, Response) {
+        if parameter(parameters, "VisibilityTimeout") != Some("0") {
+            return refused(400, "InvalidParameterValue", "a visibility other than zero");
+        }
+        let held = self.queues.entry(queue.to_string()).or_default();
+        let Some((id, at)) = in_flight(held, parameters) else {
+            return invalid_handle();
+        };
+        held[at].in_flight = false;
+        let xml = "<ChangeMessageVisibilityResponse><ResponseMetadata><RequestId>xmip\
+                   </RequestId></ResponseMetadata></ChangeMessageVisibilityResponse>";
+        (Event::Released(origin(queue, &id)), answer(xml))
+    }
+}
+
+/// The id and place of the in-flight message the request's receipt handle
+/// names.
+fn in_flight(held: &[Held], parameters: &[(String, String)]) -> Option<(String, usize)> {
+    let id = parameter(parameters, "ReceiptHandle")?.strip_prefix("rh-")?;
+    let at = held.iter().position(|m| m.id == id && m.in_flight)?;
+    Some((id.to_string(), at))
+}
+
+fn invalid_handle() -> (Event, Response) {
+    refused(
+        404,
+        "ReceiptHandleIsInvalid",
+        "The receipt handle is not valid.",
+    )
 }
 
 /// The message `id` in `queue`, as an origin says it.
@@ -264,7 +288,7 @@ mod tests {
         let origin = format!("{QUEUE}#00000001-xmip");
         assert_eq!(
             event,
-            Event::Sent(Arrived::new(origin.clone(), b"a<b".to_vec()))
+            Event::Sent(Taken::new(origin.clone(), b"a<b".to_vec()))
         );
         let received = signed(&[("Action", "ReceiveMessage"), ("WaitTimeSeconds", "5")]);
         let (event, response) = session.answer(&received);
