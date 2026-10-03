@@ -1,4 +1,4 @@
-//! Xmip's side: the three calls a Location makes, each one signed Query
+//! Xmip's side: the four calls a Location makes, each one signed Query
 //! request over one connection to the queue's own URL.
 //!
 //! A queue URL is the whole address — `https://sqs.eu-north-1.amazonaws.com/
@@ -33,6 +33,7 @@ pub struct Message {
     pub body: Vec<u8>,
 }
 
+#[derive(Clone)]
 pub struct Client {
     signer: Signer,
     timeout: Option<Duration>,
@@ -131,6 +132,23 @@ impl Client {
             ("Version", VERSION),
             ("QueueUrl", queue_url),
             ("ReceiptHandle", receipt_handle),
+        ];
+        self.call(queue_url, &parameters).map(|_| ())
+    }
+
+    /// Make the message `receipt_handle` was received with visible again at
+    /// once — `ChangeMessageVisibility` to zero seconds — so the next
+    /// receive gets it, rather than after the queue's visibility timeout.
+    ///
+    /// # Errors
+    /// Where the endpoint refused or could not be reached.
+    pub fn release_message(&self, queue_url: &str, receipt_handle: &str) -> Result<()> {
+        let parameters = [
+            ("Action", "ChangeMessageVisibility"),
+            ("Version", VERSION),
+            ("QueueUrl", queue_url),
+            ("ReceiptHandle", receipt_handle),
+            ("VisibilityTimeout", "0"),
         ];
         self.call(queue_url, &parameters).map(|_| ())
     }

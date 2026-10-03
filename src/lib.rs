@@ -5,11 +5,15 @@
 //!
 //! SQS is the queue of every organisation that lives in AWS, and its Query
 //! API is three calls on a queue URL: send a message, receive up to ten
-//! with long polling, delete one by its receipt handle. A Receive Location
-//! receives, hands each body on as a Stream and deletes it once it is; a
-//! Send Location sends a Stream as one message. Both are Signature Version
-//! 4 over plain HTTP/1.1 on a socket — `https://` with the `tls` feature,
-//! which is the http technology's TLS (ADR-0033).
+//! with long polling, delete one by its receipt handle — and a fourth, make
+//! one visible again. A Receive Location receives and hands each body on as
+//! a Stream, leaving it in flight; it deletes it once the runtime accepts
+//! it after the whole receive cycle, deletes it too where the cycle
+//! refused it — SQS has no rejection of one message — and makes it
+//! visible again at once where the cycle failed. A Send Location sends a Stream as one
+//! message. Both are Signature Version 4 over plain HTTP/1.1 on a socket —
+//! `https://` with the `tls` feature, which is the http technology's TLS
+//! (ADR-0033).
 //!
 //! ```text
 //! client.rs    Xmip's side: send, receive, delete
@@ -50,7 +54,7 @@ use http::endpoint::Connections;
 use net::ceiling;
 pub use session::{Event, Session};
 use transport::error::Result;
-use transport::{Arrived, Configured, Directions, Transport};
+use transport::{Acknowledgement, Arrived, Configured, Directions, Transport, Verdict};
 use xcore::settings::{Applies, Kind, Presence, Read, Setting, Settings};
 
 /// The largest message SQS carries: 256 KiB.
@@ -153,19 +157,45 @@ impl Transport for SqsTransport {
         Directions::BOTH
     }
 
-    /// Every message one receive hands back, each deleted once it is a
-    /// Stream.
+    fn arrivals(&self) -> transport::Arrivals {
+        transport::Arrivals::Unordered(
+            "a message received stays invisible to the next receive until it is told",
+        )
+    }
+
+    /// Every message one receive hands back, whole, each left in flight:
+    /// the receive deletes nothing. Its acknowledgement deletes the message
+    /// by its receipt handle on [`Verdict::Accepted`], and on
+    /// [`Verdict::Refused`] too: SQS has no call that rejects or
+    /// dead-letters one message — a queue's redrive policy dead-letters only
+    /// after it was received again and again — so a refused message is
+    /// deleted, not received again, and the runtime has audited the
+    /// refusal and keeps the Stream. On [`Verdict::Failed`] it makes the
+    /// message visible again at once
+    /// (`ChangeMessageVisibility` to zero) so the next receive gets it,
+    /// rather than waiting out the queue's visibility timeout.
     fn receive(&self) -> Result<Vec<Arrived>> {
         let client = self.client();
-        let mut arrived = Vec::new();
-        for message in client.receive_message(&self.queue_url, self.wait)? {
-            client.delete_message(&self.queue_url, &message.receipt_handle)?;
-            arrived.push(Arrived::new(
-                session::origin(&self.queue_url, &message.id),
-                message.body,
-            ));
-        }
-        Ok(arrived)
+        let messages = client.receive_message(&self.queue_url, self.wait)?;
+        Ok(messages
+            .into_iter()
+            .map(|message| {
+                let client = client.clone();
+                let queue = self.queue_url.clone();
+                let handle = message.receipt_handle;
+                let acknowledgement = Acknowledgement::deferred(move |verdict| match verdict {
+                    Verdict::Accepted | Verdict::Refused(_) => {
+                        client.delete_message(&queue, &handle)
+                    }
+                    Verdict::Failed => client.release_message(&queue, &handle),
+                });
+                Arrived::whole(
+                    session::origin(&self.queue_url, &message.id),
+                    message.body,
+                    acknowledgement,
+                )
+            })
+            .collect())
     }
 
     fn send(&self, target: &str, bytes: &[u8]) -> Result<()> {
@@ -231,6 +261,7 @@ mod tests {
     use super::*;
     use std::net::TcpListener;
     use std::thread::JoinHandle;
+    use transport::Taken;
     use transport::loopback::Loopback;
     use transport::socket;
 
@@ -278,44 +309,70 @@ mod tests {
     }
 
     #[test]
-    fn what_is_sent_to_a_session_is_received_back_and_deleted() {
+    fn an_accepted_or_refused_message_is_deleted_and_a_failed_one_is_received_again() {
         let (listener, address) = socket::bind_tcp("127.0.0.1:0").expect("bind");
         let queue = format!("http://{address}/123456789012/orders");
         let near = node(&queue, "secret");
-        // Two sends, one receive, then a delete per message.
-        let far_end = serve(near.session(), listener, 5);
+        // Three sends, a receive, a delete, a release and a delete, a
+        // receive, a delete.
+        let far_end = serve(near.session(), listener, 9);
         near.send("", b"UNA:+.? '").expect("its own queue");
         near.send(&queue, "r\u{e4}k\r\n".as_bytes())
             .expect("a queue URL");
-        let arrived = near.receive().expect("received");
-        assert_eq!(arrived.len(), 2);
-        assert_eq!(arrived[0].bytes, b"UNA:+.? '");
-        assert_eq!(arrived[1].bytes, "r\u{e4}k\r\n".as_bytes());
-        assert!(arrived[0].origin_uri.starts_with(&format!("{queue}#")));
+        near.send("", b"C3").expect("its own queue");
+        let mut arrived = near.receive().expect("received");
+        assert_eq!(arrived.len(), 3);
+        assert!(arrived.iter().all(Arrived::defers));
+        let third = arrived.pop().expect("third");
+        let third_origin = third.origin_uri.clone();
+        let second = arrived.pop().expect("second");
+        let first = arrived.pop().expect("first").taken().expect("accepted");
+        assert_eq!(first.bytes, b"UNA:+.? '");
+        assert!(first.origin_uri.starts_with(&format!("{queue}#")));
+        let failed_origin = second.origin_uri.clone();
+        second.failed().expect("released");
+        third
+            .refused(transport::Refusal::Unacceptable)
+            .expect("deleted");
+        let again = near.receive().expect("received again");
+        assert_eq!(again.len(), 1, "the failed one, and only it");
+        let again = again.into_iter().next().expect("one").taken().expect("ok");
+        assert_eq!(
+            (again.origin_uri, again.bytes),
+            (failed_origin.clone(), "r\u{e4}k\r\n".as_bytes().to_vec())
+        );
         let (session, events) = far_end.join().expect("thread");
-        assert!(session.messages().is_empty(), "deleted after receive");
+        assert!(session.messages().is_empty(), "all deleted once answered");
         assert_eq!(
             events[0],
-            Event::Sent(Arrived::new(
-                arrived[0].origin_uri.clone(),
-                b"UNA:+.? '".to_vec()
-            ))
+            Event::Sent(Taken::new(first.origin_uri.clone(), b"UNA:+.? '".to_vec()))
         );
         assert!(matches!(
-            events[2],
+            events[3],
             Event::Received {
-                count: 2,
+                count: 3,
                 wait: 1,
                 ..
             }
         ));
-        assert_eq!(
-            events
-                .iter()
-                .filter(|e| matches!(e, Event::Deleted(_)))
-                .count(),
-            2
-        );
+        assert_eq!(events[4], Event::Deleted(first.origin_uri));
+        assert_eq!(events[5], Event::Released(failed_origin.clone()));
+        assert_eq!(events[6], Event::Deleted(third_origin));
+        assert!(matches!(events[7], Event::Received { count: 1, .. }));
+        assert_eq!(events[8], Event::Deleted(failed_origin));
+    }
+
+    #[test]
+    fn a_receive_deletes_nothing_until_its_verdict() {
+        let (listener, address) = socket::bind_tcp("127.0.0.1:0").expect("bind");
+        let queue = format!("http://{address}/123456789012/orders");
+        let near = node(&queue, "secret");
+        let far_end = serve(near.session(), listener, 2);
+        near.send("", b"UNA").expect("sent");
+        let arrived = near.receive().expect("received");
+        drop(arrived);
+        let (session, _) = far_end.join().expect("thread");
+        assert_eq!(session.messages().len(), 1, "in flight, not deleted");
     }
 
     #[test]
