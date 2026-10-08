@@ -7,6 +7,7 @@
 use std::net::TcpListener;
 
 use net::Endpoint;
+use transport::ArrivalIdentity;
 use transport::Transport;
 use transport::error::{Result, protocol_error};
 use transport::listening::Listening;
@@ -36,6 +37,10 @@ impl SqsTransport {
 }
 
 impl Loopback for SqsTransport {
+    fn arrival_identity(&self) -> ArrivalIdentity {
+        ArrivalIdentity::Unnamed("the queue delivers it: its SenderId says who sent it")
+    }
+
     fn ceiling(&self) -> Option<usize> {
         Some(ceiling())
     }

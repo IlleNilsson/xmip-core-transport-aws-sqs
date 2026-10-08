@@ -21,6 +21,10 @@ use transport::Taken;
 use transport::error::Result;
 
 use crate::client::VERSION;
+
+/// The one sender this in-process queue knows, as SQS names a sender in
+/// its `SenderId` system attribute: the loopback's.
+pub const LOOPBACK_SENDER: &str = "AIDAXMIPLOOPBACK";
 use aws::query::{self, parameter};
 use aws::sigv4::Signer;
 use http::server;
@@ -162,6 +166,20 @@ impl Session {
         let most = parameter(parameters, "MaxNumberOfMessages")
             .and_then(|n| n.parse().ok())
             .unwrap_or(1);
+        // The sender SQS records, said where the receive asks for it: this
+        // in-process queue knows one sender, the loopback's.
+        let asked = parameter(parameters, "AttributeName.1") == Some("SenderId");
+        let sender = if asked {
+            format!(
+                concat!(
+                    "<Attribute><Name>SenderId</Name>",
+                    "<Value>{}</Value></Attribute>"
+                ),
+                LOOPBACK_SENDER
+            )
+        } else {
+            String::new()
+        };
         let mut messages = String::new();
         let mut count = 0;
         for held in self.queues.entry(queue.to_string()).or_default() {
@@ -173,7 +191,7 @@ impl Session {
             write!(
                 messages,
                 "<Message><MessageId>{}</MessageId><ReceiptHandle>rh-{}</ReceiptHandle>\
-                 <Body>{}</Body></Message>",
+                 <Body>{}</Body>{sender}</Message>",
                 held.id,
                 held.id,
                 escape(&held.body)
