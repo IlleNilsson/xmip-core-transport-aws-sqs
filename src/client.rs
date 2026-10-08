@@ -12,7 +12,7 @@ use transport::error::Result;
 
 use aws::query::{self, parameter, text};
 use aws::sigv4::{self, Signer};
-use codec::xml::texts;
+use codec::xml;
 use http::endpoint::{Connections, Offer};
 use net::Endpoint;
 use net::http::{Request, Response};
@@ -31,6 +31,31 @@ pub struct Message {
     pub id: String,
     pub receipt_handle: String,
     pub body: Vec<u8>,
+    /// The `SenderId` system attribute: the account or principal that sent
+    /// it, where the service recorded one.
+    pub sender_id: Option<String>,
+}
+
+/// The system attribute that names who sent a message.
+const SENDER_ID: &str = "SenderId";
+
+/// One `<Message>`'s content, as a [`Message`].
+fn message_of(message: &str) -> Result<Message> {
+    let sender_id = xml::elements(message, "Attribute")
+        .map(|attribute| {
+            let content = attribute.content();
+            Ok((xml::text(content, "Name")?, xml::text(content, "Value")?))
+        })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .find_map(|(name, value)| (name.as_deref() == Some(SENDER_ID)).then_some(value))
+        .flatten();
+    Ok(Message {
+        id: xml::text(message, "MessageId")?.unwrap_or_default(),
+        receipt_handle: xml::text(message, "ReceiptHandle")?.unwrap_or_default(),
+        body: xml::text(message, "Body")?.unwrap_or_default().into_bytes(),
+        sender_id,
+    })
 }
 
 #[derive(Clone)]
@@ -104,22 +129,13 @@ impl Client {
             ("QueueUrl", queue_url),
             ("MaxNumberOfMessages", count.as_str()),
             ("WaitTimeSeconds", wait.as_str()),
+            // Who sent each message: the system attribute SQS records.
+            ("AttributeName.1", SENDER_ID),
         ];
         let answer = self.call(queue_url, &parameters)?;
-        let xml = answer.text()?;
-        let ids = texts(xml, "MessageId")?;
-        let handles = texts(xml, "ReceiptHandle")?;
-        let bodies = texts(xml, "Body")?;
-        Ok(ids
-            .into_iter()
-            .zip(handles)
-            .zip(bodies)
-            .map(|((id, receipt_handle), body)| Message {
-                id,
-                receipt_handle,
-                body: body.into_bytes(),
-            })
-            .collect())
+        xml::elements(answer.text()?, "Message")
+            .map(|message| message_of(message.content()))
+            .collect()
     }
 
     /// Delete the message `receipt_handle` was received with.

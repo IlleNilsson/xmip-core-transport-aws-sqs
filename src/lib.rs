@@ -50,6 +50,7 @@ pub mod session;
 use std::time::Duration;
 
 pub use client::{Client, Message};
+use context::property::SQS_SENDER_ID;
 use http::endpoint::Connections;
 use net::ceiling;
 pub use session::{Event, Session};
@@ -189,11 +190,14 @@ impl Transport for SqsTransport {
                     }
                     Verdict::Failed => client.release_message(&queue, &handle),
                 });
+                let sender = message.sender_id.map(|id| (SQS_SENDER_ID.to_string(), id));
                 Arrived::whole(
                     session::origin(&self.queue_url, &message.id),
                     message.body,
                     acknowledgement,
                 )
+                .detected()
+                .observing_all(sender)
             })
             .collect())
     }
@@ -370,6 +374,10 @@ mod tests {
         let far_end = serve(near.session(), listener, 2);
         near.send("", b"UNA").expect("sent");
         let arrived = near.receive().expect("received");
+        assert!(arrived[0].observed().contains(&(
+            context::property::SQS_SENDER_ID.to_string(),
+            session::LOOPBACK_SENDER.to_string()
+        )));
         drop(arrived);
         let (session, _) = far_end.join().expect("thread");
         assert_eq!(session.messages().len(), 1, "in flight, not deleted");
