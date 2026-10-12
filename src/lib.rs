@@ -164,6 +164,14 @@ impl Transport for SqsTransport {
         )
     }
 
+    fn waiting(&self) -> transport::Waiting {
+        if self.wait > 0 {
+            transport::Waiting::Waits("a long poll waits up to wait_seconds for a message")
+        } else {
+            transport::Waiting::Polled("a receive with no wait_seconds returns at once")
+        }
+    }
+
     /// Every message one receive hands back, whole, each left in flight:
     /// the receive deletes nothing. Its acknowledgement deletes the message
     /// by its receipt handle on [`Verdict::Accepted`], and on
