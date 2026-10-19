@@ -183,9 +183,9 @@ impl Transport for SqsTransport {
     /// message visible again at once
     /// (`ChangeMessageVisibility` to zero) so the next receive gets it,
     /// rather than waiting out the queue's visibility timeout.
-    fn receive(&self) -> Result<Vec<Arrived>> {
+    fn receive_up_to(&self, most: usize) -> Result<Vec<Arrived>> {
         let client = self.client();
-        let messages = client.receive_message(&self.queue_url, self.wait)?;
+        let messages = client.receive_message(&self.queue_url, self.wait, most)?;
         Ok(messages
             .into_iter()
             .map(|message| {
@@ -210,8 +210,15 @@ impl Transport for SqsTransport {
             .collect())
     }
 
-    fn send(&self, target: &str, bytes: &[u8]) -> Result<()> {
-        ceiling::within(bytes.len(), ceiling(), "one SQS message carries")?;
+    fn sending(&self) -> transport::Sending {
+        transport::Sending::Gathered(
+            "one SQS message carries the whole body, signed with its digest",
+        )
+    }
+
+    fn send_from(&self, target: &str, outgoing: transport::Outgoing<'_>) -> Result<()> {
+        ceiling::within(outgoing.len(), ceiling(), "one SQS message carries")?;
+        let bytes: &[u8] = &outgoing.gather()?;
         self.client()
             .send_message(self.resolve(target), bytes)
             .map(|_| ())

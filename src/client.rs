@@ -114,14 +114,16 @@ impl Client {
         Ok(codec::xml::text(answer.text()?, "MessageId")?.unwrap_or_default())
     }
 
-    /// Up to [`MAX_MESSAGES`] messages from the queue at `queue_url`,
+    /// Up to `most` messages, and [`MAX_MESSAGES`] at most, from the queue at
+    /// `queue_url`,
     /// waiting `wait` seconds for one where none is there — long polling.
     ///
     /// # Errors
     /// Where the endpoint refused, could not be reached, or did not answer
     /// with messages.
-    pub fn receive_message(&self, queue_url: &str, wait: u8) -> Result<Vec<Message>> {
-        let count = MAX_MESSAGES.to_string();
+    pub fn receive_message(&self, queue_url: &str, wait: u8, most: usize) -> Result<Vec<Message>> {
+        let count = u8::try_from(most).map_or(MAX_MESSAGES, |most| most.clamp(1, MAX_MESSAGES));
+        let count = count.to_string();
         let wait = wait.to_string();
         let parameters = [
             ("Action", "ReceiveMessage"),
@@ -212,7 +214,9 @@ mod tests {
         client
             .send_message(&queue, "r\u{e4}k <&> \"b\"".as_bytes())
             .expect("sent");
-        let messages = client.receive_message(&queue, 20).expect("received");
+        let messages = client
+            .receive_message(&queue, 20, usize::MAX)
+            .expect("received");
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].id, id);
         assert_eq!(messages[0].body, b"UNA:+.? '");
@@ -270,7 +274,7 @@ mod tests {
         assert!(!refused.retryable);
         assert!(
             client
-                .receive_message("http://127.0.0.1:1/q", 0)
+                .receive_message("http://127.0.0.1:1/q", 0, usize::MAX)
                 .expect_err("nobody")
                 .retryable
         );
