@@ -3,7 +3,7 @@
 //! Streams that arrive as messages on an SQS queue. One message is one
 //! Stream, its id kept beside it.
 //!
-//! SQS is the queue of every organisation that lives in AWS, and its Query
+//! SQS is the queue of every organization that lives in AWS, and its Query
 //! API is three calls on a queue URL: send a message, receive up to ten
 //! with long polling, delete one by its receipt handle — and a fourth, make
 //! one visible again. A Receive Location receives and hands each body on as
@@ -37,7 +37,7 @@
 //! is refused there with the reason, never replaced and called delivered.
 //! [`ceiling`] and [`aws::query::refusal`] say both rules.
 //!
-//! A queue is not an artefact anyone claims: a received message is in
+//! A queue is not an artifact anyone claims: a received message is in
 //! flight until it is deleted, which is the queue's own claim, so
 //! [`Transport::claims`] answers `None`. The origin URI is the queue URL
 //! with the message id as its fragment. A send target is a queue URL, or
