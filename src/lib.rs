@@ -50,7 +50,7 @@ pub mod session;
 use std::time::Duration;
 
 pub use client::{Client, Message};
-use context::property::SQS_SENDER_ID;
+use context::property::{BROKER, BROKER_VERIFIED, SQS_SENDER_ID, TLS_HANDSHAKE_VERIFIED};
 use http::endpoint::Connections;
 use net::ceiling;
 pub use session::{Event, Session};
@@ -138,6 +138,27 @@ impl SqsTransport {
         }
     }
 
+    /// The broker this transport receives from, by its host, and the
+    /// transport's word that its connection proved it (ADR-0019, amendment
+    /// 2026-10-31): only for an `https://` queue, reached over TLS that
+    /// verified the service's certificate for that host, and signed with
+    /// the Location's secret, which the service accepted or the receive
+    /// would have failed. SQS writes `SenderId` itself, so a sender cannot
+    /// name another; over `http://` nothing proved who answered.
+    fn broker(&self) -> Vec<(String, String)> {
+        let Ok(endpoint) = net::Endpoint::parse(&self.queue_url) else {
+            return Vec::new();
+        };
+        let mut broker = vec![(BROKER.to_string(), endpoint.host().to_string())];
+        if endpoint.secure() && !self.access_key.is_empty() && !self.secret_key.is_empty() {
+            broker.push((
+                BROKER_VERIFIED.to_string(),
+                TLS_HANDSHAKE_VERIFIED.to_string(),
+            ));
+        }
+        broker
+    }
+
     /// The queue a target names, or this transport's own where it names
     /// none.
     fn resolve<'a>(&'a self, target: &'a str) -> &'a str {
@@ -186,6 +207,7 @@ impl Transport for SqsTransport {
     fn receive_up_to(&self, most: usize) -> Result<Vec<Arrived>> {
         let client = self.client();
         let messages = client.receive_message(&self.queue_url, self.wait, most)?;
+        let broker = self.broker();
         Ok(messages
             .into_iter()
             .map(|message| {
@@ -206,6 +228,7 @@ impl Transport for SqsTransport {
                 )
                 .detected()
                 .observing_all(sender)
+                .observing_all(broker.clone())
             })
             .collect())
     }
@@ -392,13 +415,48 @@ mod tests {
         let far_end = serve(near.session(), listener, 2);
         near.send("", b"UNA").expect("sent");
         let arrived = near.receive().expect("received");
-        assert!(arrived[0].observed().contains(&(
-            context::property::SQS_SENDER_ID.to_string(),
+        let observed = arrived[0].observed();
+        assert!(observed.contains(&(
+            SQS_SENDER_ID.to_string(),
             session::LOOPBACK_SENDER.to_string()
         )));
+        // Over http:// nothing proved who answered: the broker is named
+        // and not vouched for.
+        assert!(observed.contains(&(BROKER.to_string(), "127.0.0.1".to_string())));
+        assert!(!observed.iter().any(|(name, _)| name == BROKER_VERIFIED));
         drop(arrived);
         let (session, _) = far_end.join().expect("thread");
         assert_eq!(session.messages().len(), 1, "in flight, not deleted");
+    }
+
+    #[test]
+    fn only_an_https_queue_signed_with_the_locations_secret_says_its_broker_was_proven() {
+        let queue = "https://sqs.eu-north-1.amazonaws.com/123456789012/orders";
+        let proven = SqsTransport::new(queue, "eu-north-1").with_credentials("AKIDEXAMPLE", "s");
+        assert!(proven.broker().contains(&(
+            BROKER_VERIFIED.to_string(),
+            TLS_HANDSHAKE_VERIFIED.to_string()
+        )));
+        assert!(proven.broker().contains(&(
+            BROKER.to_string(),
+            "sqs.eu-north-1.amazonaws.com".to_string()
+        )));
+
+        let unsigned = SqsTransport::new(queue, "eu-north-1");
+        assert!(
+            !unsigned
+                .broker()
+                .iter()
+                .any(|(name, _)| name == BROKER_VERIFIED)
+        );
+        let clear = SqsTransport::new("http://127.0.0.1:9324/1/orders", "eu-north-1")
+            .with_credentials("AKIDEXAMPLE", "s");
+        assert!(
+            !clear
+                .broker()
+                .iter()
+                .any(|(name, _)| name == BROKER_VERIFIED)
+        );
     }
 
     #[test]
