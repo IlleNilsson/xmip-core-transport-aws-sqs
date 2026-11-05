@@ -1,5 +1,5 @@
 //! The far end: enough of SQS to answer one Location, and what a test or
-//! the playground puts on loopback.
+//! the essentials puts on loopback.
 //!
 //! Not SQS. One session holds the messages of every queue it is asked
 //! about in memory, verifies every request against one credential, and
