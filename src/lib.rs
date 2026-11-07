@@ -304,6 +304,7 @@ impl Configured for SqsTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::assert_matches;
     use std::net::TcpListener;
     use std::thread::JoinHandle;
     use transport::Taken;
@@ -392,18 +393,18 @@ mod tests {
             events[0],
             Event::Sent(Taken::new(first.origin_uri.clone(), b"UNA:+.? '".to_vec()))
         );
-        assert!(matches!(
+        assert_matches!(
             events[3],
             Event::Received {
                 count: 3,
                 wait: 1,
                 ..
             }
-        ));
+        );
         assert_eq!(events[4], Event::Deleted(first.origin_uri));
         assert_eq!(events[5], Event::Released(failed_origin.clone()));
         assert_eq!(events[6], Event::Deleted(third_origin));
-        assert!(matches!(events[7], Event::Received { count: 1, .. }));
+        assert_matches!(events[7], Event::Received { count: 1, .. });
         assert_eq!(events[8], Event::Deleted(failed_origin));
     }
 

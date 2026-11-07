@@ -193,6 +193,7 @@ pub fn action(request: &Request) -> Option<String> {
 mod tests {
     use super::*;
     use crate::session::{Event, Session};
+    use std::assert_matches;
     use transport::socket;
 
     #[test]
@@ -234,14 +235,14 @@ mod tests {
         assert!(!missing.retryable);
         let (session, events) = far_end.join().expect("thread");
         assert_eq!(session.messages().len(), 1, "one left in flight");
-        assert!(matches!(
+        assert_matches!(
             &events[2],
             Event::Received {
                 count: 2,
                 wait: 20,
                 ..
             }
-        ));
+        );
         assert_eq!(events[3], Event::Deleted(format!("{queue}#{id}")));
         assert_eq!(
             events[4],

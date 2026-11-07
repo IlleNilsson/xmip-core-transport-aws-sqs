@@ -278,6 +278,7 @@ fn refused(status: u16, code: &str, message: &str) -> (Event, Response) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::assert_matches;
 
     const AT: &str = "20260910T000000Z";
     const QUEUE: &str = "http://sqs.local/123456789012/orders";
@@ -316,20 +317,20 @@ mod tests {
                 .expect("text")
                 .contains("<Body>a&lt;b</Body>")
         );
-        assert!(matches!(
+        assert_matches!(
             event,
             Event::Received {
                 count: 1,
                 wait: 5,
                 ..
             }
-        ));
+        );
         let (event, response) = session.answer(&received);
         assert!(
             !response.text().expect("text").contains("<Message>"),
             "in flight, not offered again"
         );
-        assert!(matches!(event, Event::Received { count: 0, .. }));
+        assert_matches!(event, Event::Received { count: 0, .. });
         let deleted = signed(&[
             ("Action", "DeleteMessage"),
             ("ReceiptHandle", "rh-00000001-xmip"),
