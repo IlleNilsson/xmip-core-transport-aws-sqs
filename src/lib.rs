@@ -109,13 +109,6 @@ impl SqsTransport {
         self
     }
 
-    /// Give up on an endpoint that stops answering after `timeout`.
-    #[must_use]
-    pub const fn timing_out_after(mut self, timeout: Duration) -> Self {
-        self.timeout = Some(timeout);
-        self
-    }
-
     /// The client this transport speaks through.
     #[must_use]
     pub fn client(&self) -> Client {
@@ -269,19 +262,21 @@ impl Configured for SqsTransport {
                           message; it answers at once when left out.",
                 applies: Applies::Receive,
             },
-            Setting {
-                name: "timeout",
-                kind: Kind::Duration,
-                presence: Presence::Optional,
-                meaning: "How long an endpoint that stops answering is waited on; unbounded \
-                          when left out.",
-                applies: Applies::Both,
-            },
+            transport::configured::timeout(
+                Applies::Both,
+                None,
+                "How long an endpoint that stops answering is waited on; unbounded \
+                 when left out.",
+            ),
         ],
     };
 
     /// The schemes a Location's address is entered with to choose this technology.
     const SCHEMES: &'static [&'static str] = &["aws-sqs"];
+
+    fn timeout_kept(&mut self) -> Option<&mut dyn transport::configured::TimeoutKept> {
+        Some(&mut self.timeout)
+    }
 
     fn configured(address: &str, settings: &Read) -> Result<Self> {
         // The access key and secret come through the Location's credentials.
@@ -290,10 +285,7 @@ impl Configured for SqsTransport {
             // The declaration holds it to 0..=20; waiting caps it again.
             transport = transport.waiting(u8::try_from(seconds).unwrap_or(u8::MAX));
         }
-        Ok(match settings.optional_duration("timeout") {
-            Some(timeout) => transport.timing_out_after(timeout),
-            None => transport,
-        })
+        Ok(transport)
     }
 }
 
