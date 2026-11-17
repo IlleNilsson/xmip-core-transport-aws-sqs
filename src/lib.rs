@@ -25,7 +25,7 @@
 //! technology; Signature Version 4 and the Query API — the form, the
 //! answer, the error, the text rule — from the AWS crate, the flat XML
 //! scan from the capability (ADR-0044). The signer and the Query API lived
-//! here until 2026-09-14, the signer importing the s3 technology and
+//! here until 2026-09-14, the signer importing the aws-s3 technology and
 //! aws-sns importing this one, and in the http technology until the
 //! owner's ruling of 2026-09-22: what AWS speaks is shared through the AWS
 //! crate, never sideways.
