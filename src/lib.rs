@@ -17,7 +17,7 @@
 //!
 //! ```text
 //! client.rs    Xmip's side: send, receive, delete
-//! session.rs   the far end a test or the essentials runs on loopback
+//! session.rs   the far end a test or the System Tests run on loopback
 //! loopback.rs  both ends of one exchange on this machine (ADR-0051)
 //! ```
 //!
@@ -121,7 +121,7 @@ impl SqsTransport {
     }
 
     /// A far end that holds this transport's credentials, for a test or the
-    /// essentials to run on loopback.
+    /// System Tests to run on loopback.
     #[must_use]
     pub fn session(&self) -> Session {
         let session = Session::new(&self.region, &self.access_key, &self.secret_key);
