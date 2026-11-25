@@ -35,6 +35,11 @@ net = { package = "xmip-core-library-net", git = "https://github.com/IlleNilsson
 # the AWS crate (ADR-0044, the owner's ruling of 2026-09-22).
 aws = { package = "xmip-core-transport-aws", git = "https://github.com/IlleNilsson/xmip-core-transport-aws", branch = "main" }
 
+[dev-dependencies]
+# A Location's secret held in memory for the tests, from the capability's
+# test support and never a production build (ADR-0044).
+transport = { package = "xmip-core-transport", git = "https://github.com/IlleNilsson/xmip-core-transport", branch = "main", features = ["test-support"] }
+
 [features]
 default = []
 # HTTPS endpoints. Off by default, as it is in the http technology.

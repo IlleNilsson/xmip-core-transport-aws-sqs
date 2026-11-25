@@ -74,6 +74,10 @@ pub struct SqsTransport {
     /// The connections kept to the service, shared by every client this
     /// makes.
     connections: Connections,
+    /// The secret a Location names, the secret access key its requests are
+    /// signed with, read at each request (ADR-0019, amendment 2026-10-29;
+    /// ADR-0015, amendment 2026-11-25); `secret_key` where it names none.
+    secret: Option<transport::Secured>,
 }
 
 impl SqsTransport {
@@ -90,6 +94,7 @@ impl SqsTransport {
             wait: 0,
             timeout: None,
             connections: Connections::new(),
+            secret: None,
         }
     }
 
@@ -109,15 +114,21 @@ impl SqsTransport {
         self
     }
 
-    /// The client this transport speaks through.
-    #[must_use]
-    pub fn client(&self) -> Client {
-        let client = Client::new(&self.region, &self.access_key, &self.secret_key);
+    /// The client this transport speaks through, signing with the secret
+    /// the Location names as it is set now.
+    ///
+    /// # Errors
+    /// Where the Location's secret is not set, cannot be read or is no
+    /// password (`transport::secured::presented`).
+    pub fn client(&self) -> Result<Client> {
+        let secret_key =
+            transport::secured::presented(self.secret.as_ref(), &self.secret_key, "aws-sqs")?;
+        let client = Client::new(&self.region, &self.access_key, &secret_key);
         let client = client.sharing(self.connections.clone());
-        match self.timeout {
+        Ok(match self.timeout {
             Some(timeout) => client.timing_out_after(timeout),
             None => client,
-        }
+        })
     }
 
     /// A far end that holds this transport's credentials, for a test or the
@@ -143,7 +154,8 @@ impl SqsTransport {
             return Vec::new();
         };
         let mut broker = vec![(BROKER.to_string(), endpoint.host().to_string())];
-        if endpoint.secure() && !self.access_key.is_empty() && !self.secret_key.is_empty() {
+        let signed = self.secret.is_some() || !self.secret_key.is_empty();
+        if endpoint.secure() && !self.access_key.is_empty() && signed {
             broker.push((
                 BROKER_VERIFIED.to_string(),
                 TLS_HANDSHAKE_VERIFIED.to_string(),
@@ -194,7 +206,7 @@ impl Transport for SqsTransport {
     /// (`ChangeMessageVisibility` to zero) so the next receive gets it,
     /// rather than waiting out the queue's visibility timeout.
     fn receive_up_to(&self, most: usize) -> Result<Vec<Arrived>> {
-        let client = self.client();
+        let client = self.client()?;
         let messages = client.receive_message(&self.queue_url, self.wait, most)?;
         let broker = self.broker();
         Ok(messages
@@ -231,7 +243,7 @@ impl Transport for SqsTransport {
     fn send_from(&self, target: &str, outgoing: transport::Outgoing<'_>) -> Result<()> {
         ceiling::within(outgoing.len(), ceiling(), "one SQS message carries")?;
         let bytes: &[u8] = &outgoing.gather()?;
-        self.client()
+        self.client()?
             .send_message(self.resolve(target), bytes)
             .map(|_| ())
     }
@@ -239,8 +251,8 @@ impl Transport for SqsTransport {
 
 impl Configured for SqsTransport {
     /// The address is the queue URL, `https://sqs.<region>.amazonaws.com/
-    /// <account>/<queue>`. The access key and its secret are the Location's
-    /// credentials, not settings: a secret never is.
+    /// <account>/<queue>`. The access key ID is `access_key_id`; its secret
+    /// access key is the Location's `secret`, never a setting.
     const SETTINGS: &'static Settings = &Settings {
         technology: env!("CARGO_PKG_NAME"),
         settings: &[
@@ -251,6 +263,7 @@ impl Configured for SqsTransport {
                 meaning: "The AWS region requests are signed for, eu-north-1.",
                 applies: Applies::Both,
             },
+            aws::access_key::ACCESS_KEY_ID,
             Setting {
                 name: "wait_seconds",
                 kind: Kind::Integer {
@@ -279,13 +292,24 @@ impl Configured for SqsTransport {
     }
 
     fn configured(address: &str, settings: &Read) -> Result<Self> {
-        // The access key and secret come through the Location's credentials.
+        // The secret access key comes through the Location's secret.
         let mut transport = Self::new(address, settings.text("region"));
+        if let Some(access_key) = settings.optional_text(aws::access_key::ACCESS_KEY_ID.name) {
+            transport.access_key = access_key.to_string();
+        }
         if let Some(seconds) = settings.optional_integer("wait_seconds") {
             // The declaration holds it to 0..=20; waiting caps it again.
             transport = transport.waiting(u8::try_from(seconds).unwrap_or(u8::MAX));
         }
         Ok(transport)
+    }
+
+    /// The secret access key the Location's secret holds, signed with at
+    /// each request as its `access_key_id`; refused where it names none.
+    fn secured_by(mut self, secret: transport::Secured) -> Result<Self> {
+        let secret = aws::access_key::signing_as(&self.access_key, secret)?;
+        self.secret = Some(secret);
+        Ok(self)
     }
 
     /// The connections its clients share, an HTTP/2 one's frames in a span
@@ -555,5 +579,59 @@ mod tests {
         );
         assert!(aws::query::refusal(&[0xff]).is_some());
         assert!(aws::query::refusal(b"text").is_none());
+    }
+
+    /// A Location signs as its `access_key_id` with the secret access key
+    /// the secret it names holds, read at each request (ADR-0015, amendment
+    /// 2026-11-25).
+    #[test]
+    fn a_location_signs_with_the_secret_it_names_as_its_access_key_id() {
+        use std::sync::Arc;
+        use transport::secured::Kept;
+        use xcore::settings::Given;
+        let drawn = Kept::drawn();
+        let (listener, address) = socket::bind_tcp("127.0.0.1:0").expect("bind");
+        let queue = format!("http://{address}/123456789012/orders");
+        let text = |name: &str, value: &str| (name.to_string(), Given::Text(value.to_string()));
+        let given = [
+            text("region", "eu-north-1"),
+            text("access_key_id", "AKIDPROBE"),
+        ];
+        let kept = Arc::new(Kept::default());
+        let near = SqsTransport::open(&queue, Applies::Send, &given)
+            .expect("built")
+            .timing_out_after(Duration::from_secs(2))
+            .secured_by(kept.secured("partner-x.sqs"))
+            .expect("presents its secret");
+        let unset = near.send("", b"UNA").expect_err("not set");
+        assert!(
+            unset.retryable && unset.message.contains("is not set"),
+            "{unset}"
+        );
+
+        kept.set("partner-x.sqs", xcore::SecretKind::Password, &drawn);
+        let far = Session::new("eu-north-1", "AKIDPROBE", &drawn);
+        let far_end = serve(far.timing_out_after(Duration::from_secs(2)), listener, 1);
+        near.send("", b"UNA").expect("signed with the secret");
+        let (_, events) = far_end.join().expect("thread");
+        assert_matches!(&events[0], Event::Sent(taken) if taken.bytes == b"UNA");
+        let proven = SqsTransport::open("https://sqs.example/1/orders", Applies::Send, &given)
+            .expect("built")
+            .secured_by(kept.secured("partner-x.sqs"))
+            .expect("presents its secret");
+        assert!(
+            proven
+                .broker()
+                .iter()
+                .any(|(name, _)| name == BROKER_VERIFIED),
+            "signed with the secret it names"
+        );
+
+        let unnamed = SqsTransport::open(&queue, Applies::Send, &given[..1]).expect("built");
+        let Err(refused) = unnamed.secured_by(kept.secured("partner-x.sqs")) else {
+            panic!("no access key ID to sign as");
+        };
+        assert!(!refused.retryable);
+        assert!(refused.message.contains("\"access_key_id\""), "{refused}");
     }
 }
