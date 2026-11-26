@@ -42,28 +42,49 @@
 //! [`Transport::claims`] answers `None`. The origin URI is the queue URL
 //! with the message id as its fragment. A send target is a queue URL, or
 //! empty for this transport's own queue.
+//!
+//! **Built with its `declaration` feature alone** the crate is
+//! [`declaration`], what a Location of it is configured with, and none of
+//! the code above, which is behind the default feature: what the surfaces'
+//! library carries (ADR-0064, amendment 2026-11-26).
 
+#[cfg(feature = "default")]
 pub mod client;
+#[cfg(feature = "declaration")]
+pub mod declaration;
+#[cfg(feature = "default")]
 pub mod loopback;
+#[cfg(feature = "default")]
 pub mod session;
 
+#[cfg(feature = "default")]
 use std::time::Duration;
 
+#[cfg(feature = "default")]
 pub use client::{Client, Message};
+#[cfg(feature = "default")]
 use context::property::{BROKER, BROKER_VERIFIED, SQS_SENDER_ID, TLS_HANDSHAKE_VERIFIED};
+#[cfg(feature = "default")]
 use http::endpoint::Connections;
+#[cfg(feature = "default")]
 use net::ceiling;
+#[cfg(feature = "default")]
 pub use session::{Event, Session};
+#[cfg(feature = "default")]
 use transport::error::Result;
+#[cfg(feature = "default")]
 use transport::{Acknowledgement, Arrived, Configured, Directions, Transport, Verdict};
-use xcore::settings::{Applies, Kind, Presence, Read, Setting, Settings};
+#[cfg(feature = "default")]
+use xcore::settings::{Read, Settings};
 
 /// The largest message SQS carries: 256 KiB.
+#[cfg(feature = "default")]
 #[must_use]
 pub const fn ceiling() -> usize {
     256 * 1024
 }
 
+#[cfg(feature = "default")]
 pub struct SqsTransport {
     queue_url: String,
     region: String,
@@ -80,6 +101,7 @@ pub struct SqsTransport {
     secret: Option<transport::Secured>,
 }
 
+#[cfg(feature = "default")]
 impl SqsTransport {
     /// Speak to the queue at `queue_url` — `https://sqs.<region>.amazonaws.com/
     /// <account>/<queue>` in the cloud, `http://host:port/<account>/<queue>`
@@ -171,6 +193,7 @@ impl SqsTransport {
     }
 }
 
+#[cfg(feature = "default")]
 impl Transport for SqsTransport {
     fn name(&self) -> &'static str {
         "aws-sqs"
@@ -249,43 +272,10 @@ impl Transport for SqsTransport {
     }
 }
 
+#[cfg(feature = "default")]
 impl Configured for SqsTransport {
-    /// The address is the queue URL, `https://sqs.<region>.amazonaws.com/
-    /// <account>/<queue>`. The access key ID is `access_key_id`; its secret
-    /// access key is the Location's `secret`, never a setting.
-    const SETTINGS: &'static Settings = &Settings {
-        technology: env!("CARGO_PKG_NAME"),
-        settings: &[
-            Setting {
-                name: "region",
-                kind: Kind::Text,
-                presence: Presence::Required,
-                meaning: "The AWS region requests are signed for, eu-north-1.",
-                applies: Applies::Both,
-            },
-            aws::access_key::ACCESS_KEY_ID,
-            Setting {
-                name: "wait_seconds",
-                kind: Kind::Integer {
-                    minimum: 0,
-                    maximum: 20,
-                },
-                presence: Presence::Optional,
-                meaning: "How many seconds a receive long-polls an empty queue for a \
-                          message; it answers at once when left out.",
-                applies: Applies::Receive,
-            },
-            transport::configured::timeout(
-                Applies::Both,
-                None,
-                "How long an endpoint that stops answering is waited on; unbounded \
-                 when left out.",
-            ),
-        ],
-    };
-
-    /// The schemes a Location's address is entered with to choose this technology.
-    const SCHEMES: &'static [&'static str] = &["aws-sqs"];
+    const SETTINGS: &'static Settings = declaration::SETTINGS;
+    const SCHEMES: &'static [&'static str] = declaration::SCHEMES;
 
     fn timeout_kept(&mut self) -> Option<&mut dyn transport::configured::TimeoutKept> {
         Some(&mut self.timeout)
@@ -329,6 +319,7 @@ mod tests {
     use transport::Taken;
     use transport::loopback::Loopback;
     use transport::socket;
+    use xcore::settings::Applies;
 
     fn node(queue_url: &str, secret: &str) -> SqsTransport {
         SqsTransport::new(queue_url, "eu-north-1")
